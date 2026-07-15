@@ -50,26 +50,31 @@ const userAgent = "openstack-upper-constraints-downloader-go/1.1"
 
 var pinRE = regexp.MustCompile(`^(.+?)={2,3}(.+)$`)
 
+// pin — зафиксированная пара имя===версия.
 type pin struct {
 	Name    string
 	Version string
 }
 
 func (p pin) String() string {
+	// upper-constraints использует === (arbitrary equality); pip это принимает.
 	return p.Name + "===" + p.Version
 }
 
+// pypiFile — элемент из массива urls ответа PyPI JSON API.
 type pypiFile struct {
 	Filename    string `json:"filename"`
 	URL         string `json:"url"`
 	Packagetype string `json:"packagetype"`
 }
 
+// pypiRelease — урезанный ответ /pypi/<name>/<version>/json.
 type pypiRelease struct {
 	URLs []pypiFile `json:"urls"`
 }
 
 func main() {
+	// Описания флагов — на русском; runtime-статусы — на английском.
 	urlFlag := flag.String("url", defaultConstraintsURL, "URL файла upper-constraints.txt (по умолчанию: Epoxy/2025.1)")
 	constraintsFlag := flag.String("constraints", "", "Локальный upper-constraints.txt вместо скачивания")
 	destFlag := flag.String("dest", "./upper-constraints-sources", "Корневой каталог результата")
@@ -105,13 +110,13 @@ func main() {
 	// --- 1. Загрузка constraints ---
 	var text string
 	if *constraintsFlag != "" {
-		logf("Читаю constraints из %s", *constraintsFlag)
+		logf("Reading constraints from %s", *constraintsFlag)
 		b, err := os.ReadFile(*constraintsFlag)
 		must(err)
 		text = string(b)
 		must(os.WriteFile(filepath.Join(constraintsDir, "upper-constraints.txt"), b, 0o644))
 	} else {
-		logf("Скачиваю constraints: %s", *urlFlag)
+		logf("Downloading constraints: %s", *urlFlag)
 		b, err := httpGet(client, *urlFlag, 2*time.Minute)
 		must(err)
 		text = string(b)
@@ -128,15 +133,15 @@ func main() {
 	must(writeLines(filepath.Join(constraintsDir, "requirements-all.txt"), reqLines))
 	must(writeLines(filepath.Join(constraintsDir, "requirements-all-epoxy.txt"), reqLines))
 
-	logf("Уникальных пинов: %d", len(pins))
-	logf("Каталог пакетов: %s", srcDir)
+	logf("Unique package pins: %d", len(pins))
+	logf("Packages directory: %s", srcDir)
 	if usePip {
-		logf("Режим: pip (sdist), при ошибке — PyPI API")
+		logf("Mode: pip (sdist), fallback to PyPI API on failure")
 	} else {
-		logf("Режим: только PyPI API")
+		logf("Mode: PyPI API only")
 	}
 	if *githubRepo != "" {
-		logf("GitHub: после скачивания → %s (ветка %s)", *githubRepo, *githubBranch)
+		logf("GitHub: will push to %s (branch %s) after download", *githubRepo, *githubBranch)
 	}
 	logf("")
 
@@ -153,7 +158,7 @@ func main() {
 		prefix := fmt.Sprintf("[%d/%d] %s", i+1, total, p.String())
 
 		if *continueMode && alreadyHavePackage(srcDir, p.Name, p.Version) {
-			logf("%s — пропуск (уже есть)", prefix)
+			logf("%s — skip (already present)", prefix)
 			skipped = append(skipped, p.String())
 			succeeded = append(succeeded, p.String())
 			continue
@@ -166,21 +171,21 @@ func main() {
 			logf("%s — pip download (sdist)...", prefix)
 			if tryPipDownload(*pythonFlag, p, srcDir, *pipTimeout) {
 				ok = true
-				detail = "через pip"
+				detail = "via pip"
 				viaPip = append(viaPip, p.String())
 			}
 		}
 
 		if !ok {
 			if usePip {
-				logf("%s — pip не смог, пробую PyPI API...", prefix)
+				logf("%s — pip failed, trying PyPI API...", prefix)
 			} else {
 				logf("%s — PyPI API...", prefix)
 			}
 			ok, detail = tryPyPIDownload(client, p, srcDir)
 			if ok {
 				viaPyPI = append(viaPyPI, p.String()+" | "+detail)
-				detail = "через PyPI (" + detail + ")"
+				detail = "via PyPI (" + detail + ")"
 			}
 		}
 
@@ -188,7 +193,7 @@ func main() {
 			logf("%s — OK (%s)", prefix, detail)
 			succeeded = append(succeeded, p.String())
 		} else {
-			logf("%s — ОШИБКА (%s)", prefix, detail)
+			logf("%s — FAILED (%s)", prefix, detail)
 			failed = append(failed, p.String()+" | "+detail)
 		}
 	}
@@ -206,38 +211,38 @@ func main() {
 
 	logf("")
 	logf(strings.Repeat("=", 60))
-	logf("СКАЧИВАНИЕ ЗАВЕРШЕНО")
-	logf("  пинов:      %d", total)
-	logf("  успешно:    %d", len(succeeded))
-	logf("  ошибок:     %d", len(failed))
-	logf("  через pip:  %d", len(viaPip))
-	logf("  через PyPI: %d", len(viaPyPI))
+	logf("DOWNLOAD COMPLETE")
+	logf("  pins:       %d", total)
+	logf("  succeeded:  %d", len(succeeded))
+	logf("  failed:     %d", len(failed))
+	logf("  via pip:    %d", len(viaPip))
+	logf("  via PyPI:   %d", len(viaPyPI))
 	if len(skipped) > 0 {
-		logf("  пропущено:  %d (уже были на диске)", len(skipped))
+		logf("  skipped:    %d (already on disk)", len(skipped))
 	}
-	logf("  файлов:     %d  (sdist=%d, wheel=%d)", files, sdistN, wheelN)
-	logf("  размер:     %.1f MB", sizeMB)
-	logf("  каталог:    %s", srcDir)
+	logf("  files:      %d  (sdist=%d, wheel=%d)", files, sdistN, wheelN)
+	logf("  size:       %.1f MB", sizeMB)
+	logf("  directory:  %s", srcDir)
 
 	// --- GitHub ---
 	if *githubRepo != "" {
 		logf("")
 		logf(strings.Repeat("=", 60))
-		logf("ЗАЛИВКА НА GITHUB: %s", *githubRepo)
+		logf("PUSHING TO GITHUB: %s", *githubRepo)
 		msg := *commitMsg
 		if msg == "" {
 			msg = fmt.Sprintf("Update OpenStack upper-constraints packages (%d files, %.0f MB)", files, sizeMB)
 		}
 		if err := pushToGitHub(destRoot, *githubRepo, *githubBranch, msg, *githubCreate, *githubPrivate, *githubDescription, *noPush); err != nil {
-			logf("ошибка GitHub: %v", err)
+			logf("GitHub error: %v", err)
 			os.Exit(1)
 		}
-		logf("GitHub: готово → https://github.com/%s", *githubRepo)
+		logf("GitHub: done → https://github.com/%s", *githubRepo)
 	}
 
 	if len(failed) > 0 {
 		logf("")
-		logf("Не скачались:")
+		logf("Failed packages:")
 		for _, line := range failed {
 			logf("  %s", line)
 		}
@@ -247,17 +252,18 @@ func main() {
 
 // ---------- GitHub / git ----------
 
+// pushToGitHub — commit и push содержимого destRoot в owner/name.
 func pushToGitHub(destRoot, repo, branch, commitMsg string, create, private bool, description string, noPush bool) error {
 	if !commandExists("git") {
-		return errors.New("git не найден в PATH")
+		return errors.New("git not found in PATH")
 	}
 	if !commandExists("gh") {
-		return errors.New("gh (GitHub CLI) не найден; установите: https://cli.github.com/ и выполните gh auth login")
+		return errors.New("gh (GitHub CLI) not found; install from https://cli.github.com/ and run: gh auth login")
 	}
 
-	// Проверка авторизации gh
+	// проверка авторизации gh
 	if out, err := exec.Command("gh", "auth", "status").CombinedOutput(); err != nil {
-		return fmt.Errorf("gh не авторизован (%v): %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("gh is not authenticated (%v): %s", err, strings.TrimSpace(string(out)))
 	}
 
 	if create {
@@ -267,7 +273,7 @@ func pushToGitHub(destRoot, repo, branch, commitMsg string, create, private bool
 	} else {
 		// убедиться, что репо существует
 		if err := exec.Command("gh", "repo", "view", repo).Run(); err != nil {
-			return fmt.Errorf("репозиторий %s не найден; укажите --github-create или создайте его вручную", repo)
+			return fmt.Errorf("repository %s not found; pass --github-create or create it manually", repo)
 		}
 	}
 
@@ -293,7 +299,7 @@ func pushToGitHub(destRoot, repo, branch, commitMsg string, create, private bool
 	} else {
 		cur := strings.TrimSpace(string(out))
 		if cur != remoteURL && !strings.Contains(cur, repo) {
-			logf("  remote origin уже указывает на %s — оставляю", cur)
+			logf("  remote origin already points to %s — keeping it", cur)
 		} else if cur != remoteURL {
 			_ = runGit(destRoot, "remote", "set-url", "origin", remoteURL)
 		}
@@ -312,7 +318,7 @@ func pushToGitHub(destRoot, repo, branch, commitMsg string, create, private bool
 		return err
 	}
 	if strings.TrimSpace(string(status)) == "" {
-		logf("  нет изменений для коммита")
+		logf("  no changes to commit")
 		if noPush {
 			return nil
 		}
@@ -327,18 +333,17 @@ func pushToGitHub(destRoot, repo, branch, commitMsg string, create, private bool
 	}
 
 	if noPush {
-		logf("  --no-push: push пропущен")
+		logf("  --no-push: push skipped")
 		return nil
 	}
 
 	logf("  push origin %s ...", branch)
-	// -u и force-with-lease не используем; обычный push
 	cmd := exec.Command("git", "-C", destRoot, "push", "-u", "origin", branch)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		// если ветка разошлась с пустым remote history — попробовать main/master
-		logf("  повтор push...")
+		// повтор с явной веткой
+		logf("  retrying push...")
 		cmd2 := exec.Command("git", "-C", destRoot, "push", "-u", "origin", "HEAD:"+branch)
 		cmd2.Stdout = os.Stdout
 		cmd2.Stderr = os.Stderr
@@ -349,13 +354,14 @@ func pushToGitHub(destRoot, repo, branch, commitMsg string, create, private bool
 	return nil
 }
 
+// ensureGitHubRepo создаёт репозиторий через gh, если его ещё нет.
 func ensureGitHubRepo(repo string, private bool, description string) error {
 	// уже есть?
 	if exec.Command("gh", "repo", "view", repo).Run() == nil {
-		logf("  репозиторий %s уже существует", repo)
+		logf("  repository %s already exists", repo)
 		return nil
 	}
-	logf("  создаю репозиторий %s ...", repo)
+	logf("  creating repository %s ...", repo)
 	args := []string{"repo", "create", repo, "--description", description, "--confirm"}
 	if private {
 		args = append(args, "--private")
@@ -368,6 +374,7 @@ func ensureGitHubRepo(repo string, private bool, description string) error {
 	return cmd.Run()
 }
 
+// ensureGitIdentity задаёт user.email/user.name локально, если не заданы.
 func ensureGitIdentity(dir string) {
 	if exec.Command("git", "-C", dir, "config", "user.email").Run() != nil {
 		// попробовать глобальный; если нет — взять из gh
@@ -396,8 +403,12 @@ func commandExists(name string) bool {
 	return err == nil
 }
 
-// ---------- скачивание (как раньше) ----------
+// ---------- скачивание ----------
 
+// loadPinsFromConstraints разбирает upper-constraints:
+//   - пропускает комментарии и пустые строки;
+//   - отрезает environment markers после ';';
+//   - оставляет уникальные пины (имя, версия), порядок сохраняет.
 func loadPinsFromConstraints(text string) []pin {
 	seen := make(map[string]struct{})
 	var pins []pin
@@ -410,6 +421,7 @@ func loadPinsFromConstraints(text string) []pin {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// убрать markers: alabaster===1.0.0;python_version>='3.10'
 		if i := strings.IndexByte(line, ';'); i >= 0 {
 			line = strings.TrimSpace(line[:i])
 		}
@@ -427,6 +439,7 @@ func loadPinsFromConstraints(text string) []pin {
 	return pins
 }
 
+// parsePin возвращает (имя, версия) из 'pkg===1.2.3' или 'pkg==1.2.3'.
 func parsePin(line string) (pin, bool) {
 	m := pinRE.FindStringSubmatch(strings.TrimSpace(line))
 	if m == nil {
@@ -435,6 +448,8 @@ func parsePin(line string) (pin, bool) {
 	return pin{Name: strings.TrimSpace(m[1]), Version: strings.TrimSpace(m[2])}, true
 }
 
+// tryPipDownload скачивает исходники через pip.
+// Современный pip иногда падает на сборке metadata — это ожидаемо.
 func tryPipDownload(python string, p pin, dest string, timeout time.Duration) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -445,31 +460,33 @@ func tryPipDownload(python string, p pin, dest string, timeout time.Duration) bo
 	return cmd.Run() == nil
 }
 
+// tryPyPIDownload — прямое скачивание через PyPI JSON API (без локальной сборки).
 func tryPyPIDownload(client *http.Client, p pin, dest string) (bool, string) {
 	data, err := pypiJSONFor(client, p.Name, p.Version)
 	if err != nil {
-		return false, "пакет не найден на PyPI: " + err.Error()
+		return false, "package not found on PyPI: " + err.Error()
 	}
 	info, kind, ok := chooseArtifact(data.URLs)
 	if !ok {
-		return false, "на PyPI нет sdist/wheel"
+		return false, "no sdist/wheel on PyPI"
 	}
 	out := filepath.Join(dest, info.Filename)
 	if st, err := os.Stat(out); err == nil && st.Size() > 0 {
-		return true, fmt.Sprintf("%s уже есть: %s", kind, info.Filename)
+		return true, fmt.Sprintf("%s already present: %s", kind, info.Filename)
 	}
 	if err := downloadToFile(client, info.URL, out, 10*time.Minute); err != nil {
 		_ = os.Remove(out)
-		return false, "ошибка скачивания: " + err.Error()
+		return false, "download error: " + err.Error()
 	}
 	st, _ := os.Stat(out)
 	size := int64(0)
 	if st != nil {
 		size = st.Size()
 	}
-	return true, fmt.Sprintf("%s: %s (%d байт)", kind, info.Filename, size)
+	return true, fmt.Sprintf("%s: %s (%d bytes)", kind, info.Filename, size)
 }
 
+// pypiJSONFor получает метаданные релиза (сначала исходное имя, затем с дефисами).
 func pypiJSONFor(client *http.Client, name, version string) (*pypiRelease, error) {
 	candidates := []string{name, strings.ReplaceAll(name, "_", "-")}
 	tried := make(map[string]struct{})
@@ -498,6 +515,7 @@ func pypiJSONFor(client *http.Client, name, version string) (*pypiRelease, error
 	return nil, lastErr
 }
 
+// chooseArtifact предпочитает sdist; иначе pure-Python wheel; иначе любой wheel.
 func chooseArtifact(urls []pypiFile) (pypiFile, string, bool) {
 	var sdists, wheels []pypiFile
 	for _, u := range urls {
@@ -523,6 +541,7 @@ func chooseArtifact(urls []pypiFile) (pypiFile, string, bool) {
 	return wheels[0], "wheel", true
 }
 
+// alreadyHavePackage — эвристика: есть ли файл, имя которого начинается с пакета и содержит версию.
 func alreadyHavePackage(dest, name, version string) bool {
 	entries, err := os.ReadDir(dest)
 	if err != nil {
@@ -577,7 +596,7 @@ func httpGet(client *http.Client, url string, timeout time.Duration) ([]byte, er
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		return nil, fmt.Errorf("HTTP %d для %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
 	return io.ReadAll(resp.Body)
 }
@@ -652,7 +671,7 @@ func logf(format string, args ...any) {
 
 func must(err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ошибка: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
