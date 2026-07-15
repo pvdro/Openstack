@@ -9,7 +9,6 @@
 ```
 constraints/
   upper-constraints-epoxy.txt   # оригинал (с environment markers)
-  requirements-all-epoxy.txt    # уникальные пины без markers
 packages/
   epoxy-2025.1/                 # скачанные .tar.gz / .whl (~596 файлов)
 ```
